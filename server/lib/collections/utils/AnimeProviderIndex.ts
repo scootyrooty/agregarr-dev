@@ -1,8 +1,8 @@
 import {
-  lookupByMal as lookupV3ByMal,
+  aniListIdsForMal,
+  lookupByMal,
   type AnimeProviderIds,
-} from '@server/api/anibridgeV3';
-import { getAllValues, lookupByMal } from '@server/api/animeIds';
+} from '@server/api/animeIds';
 import type { LibraryItemsCache } from '@server/lib/collections/core/CollectionUtilities';
 
 /**
@@ -47,12 +47,11 @@ export interface ProviderIndex {
  * Shared between AniList and MyAnimeList collection sources.
  *
  * Indexes library items by their TMDb, IMDb, and TVDB IDs (extracted from Plex GUIDs)
- * and also resolves MyAnimeList agent GUIDs via the PlexAniBridge mapping.
+ * and also resolves MyAnimeList agent GUIDs via the AniBridge mapping.
  */
 export function buildProviderIndex(
-  libraryCache?: LibraryItemsCache,
-  mediaType?: 'movie' | 'tv',
-  mappingVersion: 'v2' | 'v3' = 'v2'
+  libraryCache: LibraryItemsCache | undefined,
+  mediaType: 'movie' | 'tv'
 ): ProviderIndex {
   const anilist = new Map<string, ProviderIndexEntry>();
   const imdb = new Map<string, ProviderIndexEntry>();
@@ -132,77 +131,20 @@ export function buildProviderIndex(
         const mMalAgent = g.match(/myanimelist:\/\/(\d+)/i);
         if (mMalAgent) {
           const malId = parseInt(mMalAgent[1]);
-          if (mappingVersion === 'v3' && mediaType) {
-            const ids = lookupV3ByMal(malId, mediaType);
-            if (ids) {
-              const hit = {
-                ratingKey: it.ratingKey,
-                title: it.title,
-                libraryKey: libKey,
-                tvdbId:
-                  mediaType === 'tv'
-                    ? itemTvdbId ?? (ids.tvdb ? Number(ids.tvdb) : undefined)
-                    : undefined,
-              };
-              if (ids.tmdb) tmdb.set(ids.tmdb, hit);
-              if (ids.tvdb) tvdb.set(ids.tvdb, hit);
-              if (ids.imdb) imdb.set(ids.imdb, hit);
-            }
-            continue;
-          }
-          const map = lookupByMal(malId);
-          if (map) {
-            if (map.anilist_id) {
-              anilist.set(String(map.anilist_id), {
-                ratingKey: it.ratingKey,
-                title: it.title,
-                libraryKey: libKey,
-                tvdbId:
-                  mediaType === 'tv' ? itemTvdbId ?? map.tvdb_id : undefined,
-              });
-            }
-            // Add all available IDs from PlexAniBridge mapping
-            if (mediaType !== 'movie' && map.tvdb_id) {
-              tvdb.set(String(map.tvdb_id), {
-                ratingKey: it.ratingKey,
-                title: it.title,
-                libraryKey: libKey,
-                tvdbId: itemTvdbId ?? Number(map.tvdb_id),
-              });
-            }
-            if (mediaType !== 'movie' && map.tmdb_show_id) {
-              tmdb.set(String(map.tmdb_show_id), {
-                ratingKey: it.ratingKey,
-                title: it.title,
-                libraryKey: libKey,
-                tvdbId:
-                  itemTvdbId ?? (map.tvdb_id ? Number(map.tvdb_id) : undefined),
-              });
-            }
-            // tmdb_movie_id can be array - add all values
-            const tmdbMovieIds =
-              mediaType === 'tv' ? [] : getAllValues(map.tmdb_movie_id);
-            for (const mid of tmdbMovieIds) {
-              tmdb.set(String(mid), {
-                ratingKey: it.ratingKey,
-                title: it.title,
-                libraryKey: libKey,
-                tvdbId: itemTvdbId,
-              });
-            }
-            // imdb_id can be array - add all values
-            const imdbIds =
-              mediaType === 'movie' ? [] : getAllValues(map.imdb_id);
-            for (const iid of imdbIds) {
-              imdb.set(iid.toLowerCase(), {
-                ratingKey: it.ratingKey,
-                title: it.title,
-                libraryKey: libKey,
-                tvdbId:
-                  itemTvdbId ?? (map.tvdb_id ? Number(map.tvdb_id) : undefined),
-              });
-            }
-          }
+          const ids = lookupByMal(malId, mediaType);
+          const hit = {
+            ratingKey: it.ratingKey,
+            title: it.title,
+            libraryKey: libKey,
+            tvdbId:
+              mediaType === 'tv'
+                ? itemTvdbId ?? (ids?.tvdb ? Number(ids.tvdb) : undefined)
+                : undefined,
+          };
+          for (const id of aniListIdsForMal(malId)) anilist.set(id, hit);
+          if (ids?.tmdb) tmdb.set(ids.tmdb, hit);
+          if (ids?.tvdb) tvdb.set(ids.tvdb, hit);
+          if (ids?.imdb) imdb.set(ids.imdb, hit);
         }
       }
     }
@@ -226,13 +168,11 @@ export function requireAnimeLibraryItems(
 export function buildLibraryProviderIndex(
   libraryCache: LibraryItemsCache | undefined,
   libraryId: string | string[],
-  mediaType?: 'movie' | 'tv',
-  mappingVersion: 'v2' | 'v3' = 'v2'
+  mediaType: 'movie' | 'tv'
 ): ProviderIndex {
   return buildProviderIndex(
     requireAnimeLibraryItems(libraryCache, libraryId),
-    mediaType,
-    mappingVersion
+    mediaType
   );
 }
 

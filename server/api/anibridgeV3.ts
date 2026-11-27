@@ -1,18 +1,16 @@
-import { fetchAnimeMappingData } from './animeIds';
-
 export interface AnimeProviderIds {
   tvdb?: string;
   tmdb?: string;
   imdb?: string;
 }
 
-type MediaType = 'movie' | 'tv';
+export type MediaType = 'movie' | 'tv';
 // An absent media type has no target. A null target has conflicting provider IDs.
-type AnimeMapping = Partial<Record<MediaType, AnimeProviderIds | null>>;
-
-let mappings = new Map<string, AnimeMapping>();
-let loadedAt = 0;
-let loadInFlight: Promise<void> | null = null;
+export type AnimeMapping = Partial<
+  Record<MediaType, AnimeProviderIds | null>
+> & {
+  anilistIds?: string[];
+};
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -36,16 +34,25 @@ function parseProviderTarget(target: string) {
   return { mediaType, provider: provider as keyof AnimeProviderIds, id };
 }
 
-function parseEpisodeMappings(targets: Record<string, unknown>): AnimeMapping {
+function parseEpisodeMappings(
+  targets: Record<string, unknown>,
+  isMalRow: boolean
+): AnimeMapping {
   const mapping: AnimeMapping = {};
   for (const [target, ranges] of Object.entries(targets)) {
-    const parsed = parseProviderTarget(target);
-    if (!parsed || !isRecord(ranges)) continue;
+    if (!isRecord(ranges)) continue;
     const hasEpisodes = Object.values(ranges).some(
       (range) => typeof range === 'string' && range.length > 0
     );
     if (!hasEpisodes) continue;
 
+    const alias = isMalRow && /^anilist:([1-9]\d*)$/.exec(target);
+    if (alias) {
+      (mapping.anilistIds ??= []).push(alias[1]);
+      continue;
+    }
+    const parsed = parseProviderTarget(target);
+    if (!parsed) continue;
     const { mediaType, provider, id } = parsed;
     const ids = mapping[mediaType];
     if (ids === null) continue;
@@ -60,7 +67,7 @@ function parseEpisodeMappings(targets: Record<string, unknown>): AnimeMapping {
   return mapping;
 }
 
-function parseMappings(data: unknown): Map<string, AnimeMapping> {
+export function parseMappings(data: unknown): Map<string, AnimeMapping> {
   if (
     !isRecord(data) ||
     !isRecord(data.$meta) ||
@@ -81,7 +88,7 @@ function parseMappings(data: unknown): Map<string, AnimeMapping> {
       continue;
     }
 
-    const mapping = parseEpisodeMappings(targets);
+    const mapping = parseEpisodeMappings(targets, source.startsWith('mal:'));
     if (!Object.keys(mapping).length) continue;
     result.set(source, mapping);
     if (mapping.tv || mapping.movie) {
@@ -95,36 +102,4 @@ function parseMappings(data: unknown): Map<string, AnimeMapping> {
   if (!hasUsableMalMapping)
     throw new Error('AniBridge mappings contain no usable MAL entries');
   return result;
-}
-
-export async function loadAnimeIds(
-  url = 'https://github.com/anibridge/anibridge-mappings/releases/download/v3/mappings.min.json'
-): Promise<void> {
-  mappings = parseMappings(await fetchAnimeMappingData(url));
-  loadedAt = Date.now();
-}
-
-export async function ensureAnimeIdsLoaded(
-  ttlMs = 12 * 60 * 60 * 1000
-): Promise<void> {
-  if (mappings.size && Date.now() - loadedAt <= ttlMs) return;
-  loadInFlight ??= loadAnimeIds().finally(() => (loadInFlight = null));
-  return loadInFlight;
-}
-
-export function lookupByAniList(
-  id: number,
-  type: MediaType,
-  malId?: number | null
-) {
-  const mapped = mappings.get(`anilist:${id}`)?.[type];
-  return mapped === undefined && malId ? lookupByMal(malId, type) : mapped;
-}
-
-export function lookupByMal(id: number, type: MediaType) {
-  return mappings.get(`mal:${id}`)?.[type];
-}
-
-export function lookupByAniDB(id: number, type: MediaType) {
-  return mappings.get(`anidb:${id}:R`)?.[type];
 }
